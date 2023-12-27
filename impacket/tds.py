@@ -1,6 +1,6 @@
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright (C) 2022 Fortra. All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -1022,7 +1022,6 @@ class MSSQL:
                 if key['TokenType'] == TDS_ERROR_TOKEN:
                     error =  "ERROR(%s): Line %d: %s" % (key['ServerName'].decode('utf-16le'), key['LineNumber'], key['MsgText'].decode('utf-16le'))                                      
                     self.lastError = SQLErrorException("ERROR: Line %d: %s" % (key['LineNumber'], key['MsgText'].decode('utf-16le')))
-                    LOG.error(error)
 
                 elif key['TokenType'] == TDS_INFO_TOKEN:
                     LOG.info("INFO(%s): Line %d: %s" % (key['ServerName'].decode('utf-16le'), key['LineNumber'], key['MsgText'].decode('utf-16le')))

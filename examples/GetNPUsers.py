@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright (C) 2022 Fortra. All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -223,9 +223,8 @@ class GetUserNoPreAuth:
 
     @staticmethod
     def outputTGT(entry, fd=None):
-        if fd is None:
-            print(entry)
-        else:
+        print(entry)
+        if fd is not None:
             fd.write(entry + '\n')
 
     def run(self):
