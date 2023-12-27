@@ -616,6 +616,78 @@ class GETST:
 
         return r, cipher, sessionKey, newSessionKey
 
+    def outputTGS(self, tgs, oldSessionKey, sessionKey, username, spn, fd=None):
+        decodedTGS = decoder.decode(tgs, asn1Spec=TGS_REP())[0]
+
+        # According to RFC4757 (RC4-HMAC) the cipher part is like:
+        # struct EDATA {
+        #       struct HEADER {
+        #               OCTET Checksum[16];
+        #               OCTET Confounder[8];
+        #       } Header;
+        #       OCTET Data[0];
+        # } edata;
+        #
+        # In short, we're interested in splitting the checksum and the rest of the encrypted data
+        #
+        # Regarding AES encryption type (AES128 CTS HMAC-SHA1 96 and AES256 CTS HMAC-SHA1 96)
+        # last 12 bytes of the encrypted ticket represent the checksum of the decrypted 
+        # ticket
+        if decodedTGS['ticket']['enc-part']['etype'] == constants.EncryptionTypes.rc4_hmac.value:
+            entry = '$krb5tgs$%d$*%s$%s$%s*$%s$%s' % (
+                constants.EncryptionTypes.rc4_hmac.value, username, decodedTGS['ticket']['realm'],
+                spn.replace(':', '~'),
+                hexlify(decodedTGS['ticket']['enc-part']['cipher'][:16].asOctets()).decode(),
+                hexlify(decodedTGS['ticket']['enc-part']['cipher'][16:].asOctets()).decode())
+            if fd is None:
+                print(entry)
+            else:
+                fd.write(entry + '\n')
+        elif decodedTGS['ticket']['enc-part']['etype'] == constants.EncryptionTypes.aes128_cts_hmac_sha1_96.value:
+            entry = '$krb5tgs$%d$%s$%s$*%s*$%s$%s' % (
+                constants.EncryptionTypes.aes128_cts_hmac_sha1_96.value, username, decodedTGS['ticket']['realm'],
+                spn.replace(':', '~'),
+                hexlify(decodedTGS['ticket']['enc-part']['cipher'][-12:].asOctets()).decode(),
+                hexlify(decodedTGS['ticket']['enc-part']['cipher'][:-12:].asOctets()).decode())
+            if fd is None:
+                print(entry)
+            else:
+                fd.write(entry + '\n')
+        elif decodedTGS['ticket']['enc-part']['etype'] == constants.EncryptionTypes.aes256_cts_hmac_sha1_96.value:
+            entry = '$krb5tgs$%d$%s$%s$*%s*$%s$%s' % (
+                constants.EncryptionTypes.aes256_cts_hmac_sha1_96.value, username, decodedTGS['ticket']['realm'],
+                spn.replace(':', '~'),
+                hexlify(decodedTGS['ticket']['enc-part']['cipher'][-12:].asOctets()).decode(),
+                hexlify(decodedTGS['ticket']['enc-part']['cipher'][:-12:].asOctets()).decode())
+            if fd is None:
+                print(entry)
+            else:
+                fd.write(entry + '\n')
+        elif decodedTGS['ticket']['enc-part']['etype'] == constants.EncryptionTypes.des_cbc_md5.value:
+            entry = '$krb5tgs$%d$*%s$%s$%s*$%s$%s' % (
+                constants.EncryptionTypes.des_cbc_md5.value, username, decodedTGS['ticket']['realm'],
+                spn.replace(':', '~'),
+                hexlify(decodedTGS['ticket']['enc-part']['cipher'][:16].asOctets()).decode(),
+                hexlify(decodedTGS['ticket']['enc-part']['cipher'][16:].asOctets()).decode())
+            if fd is None:
+                print(entry)
+            else:
+                fd.write(entry + '\n')
+        else:
+            logging.error('Skipping %s/%s due to incompatible e-type %d' % (
+                decodedTGS['ticket']['sname']['name-string'][0], decodedTGS['ticket']['sname']['name-string'][1],
+                decodedTGS['ticket']['enc-part']['etype']))
+
+        if self.__saveTGS is True:
+            # Save the ticket
+            logging.debug('About to save TGS for %s' % username)
+            ccache = CCache()
+            try:
+                ccache.fromTGS(tgs, oldSessionKey, sessionKey)
+                ccache.saveFile('%s.ccache' % username)
+            except Exception as e:
+                logging.error(str(e))
+
     def run(self):
         tgt = None
 
@@ -665,6 +737,7 @@ class GETST:
             self.__saveFileName = self.__options.impersonate
 
         self.saveTicket(tgs, oldSessionKey)
+        self.outputTGS(tgs, oldSessionKey, sessionKey, self.__user, self.__options.spn)
 
 
 if __name__ == '__main__':
