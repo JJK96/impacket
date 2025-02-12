@@ -19,6 +19,8 @@
 #
 from pyasn1.codec.ber import encoder, decoder
 from pyasn1.type import univ, namedtype, namedval, tag, constraint
+import base64
+from uuid import UUID
 
 __all__ = [
     'CONTROL_PAGEDRESULTS', 'CONTROL_SDFLAGS', 'KNOWN_CONTROLS', 'NOTIFICATION_DISCONNECT', 'KNOWN_NOTIFICATIONS',
@@ -170,6 +172,143 @@ class URI(LDAPString):
     pass
 
 
+class BofhoundPrintable:
+    """ Print output in Bofhound-parsable format """
+    _base64_attributes = ['nTSecurityDescriptor', 'msDS-GenerationId', 'auditingPolicy', 'dSASignature', 'mS-DS-CreatorSID',
+        'logonHours', 'schemaIDGUID']
+    _raw_attributes = ['whenCreated', 'whenChanged', 'dSCorePropagationData', 'accountExpires', 'badPasswordTime', 'pwdLastSet',
+        'lastLogonTimestamp', 'lastLogon', 'lastLogoff', 'maxPwdAge', 'minPwdAge', 'creationTime', 'lockOutObservationWindow',
+        'lockoutDuration']
+    _bracketed_attributes = ['objectGUID']
+    _ignore_attributes = ['userCertificate']
+
+    def format_sid(self, raw_value):
+        """
+        from https://github.com/cannatag/ldap3/blob/dev/ldap3/protocol/formatters/formatters.py
+        SID= "S-1-" IdentifierAuthority 1*SubAuthority
+               IdentifierAuthority= IdentifierAuthorityDec / IdentifierAuthorityHex
+                  ; If the identifier authority is < 2^32, the
+                  ; identifier authority is represented as a decimal
+                  ; number
+                  ; If the identifier authority is >= 2^32,
+                  ; the identifier authority is represented in
+                  ; hexadecimal
+                IdentifierAuthorityDec =  1*10DIGIT
+                  ; IdentifierAuthorityDec, top level authority of a
+                  ; security identifier is represented as a decimal number
+                IdentifierAuthorityHex = "0x" 12HEXDIG
+                  ; IdentifierAuthorityHex, the top-level authority of a
+                  ; security identifier is represented as a hexadecimal number
+                SubAuthority= "-" 1*10DIGIT
+                  ; Sub-Authority is always represented as a decimal number
+                  ; No leading "0" characters are allowed when IdentifierAuthority
+                  ; or SubAuthority is represented as a decimal number
+                  ; All hexadecimal digits must be output in string format,
+                  ; pre-pended by "0x"
+
+        Revision (1 byte): An 8-bit unsigned integer that specifies the revision level of the SID. This value MUST be set to 0x01.
+        SubAuthorityCount (1 byte): An 8-bit unsigned integer that specifies the number of elements in the SubAuthority array. The maximum number of elements allowed is 15.
+        IdentifierAuthority (6 bytes): A SID_IDENTIFIER_AUTHORITY structure that indicates the authority under which the SID was created. It describes the entity that created the SID. The Identifier Authority value {0,0,0,0,0,5} denotes SIDs created by the NT SID authority.
+        SubAuthority (variable): A variable length array of unsigned 32-bit integers that uniquely identifies a principal relative to the IdentifierAuthority. Its length is determined by SubAuthorityCount.
+        """
+        try:
+            if raw_value.startswith(b'S-1-'):
+                return raw_value
+        except Exception:
+            try:
+                if raw_value.startswith('S-1-'):
+                    return raw_value
+            except Exception:
+                pass
+        try:
+            if str is not bytes:  # Python 3
+                revision = int(raw_value[0])
+                sub_authority_count = int(raw_value[1])
+                identifier_authority = int.from_bytes(raw_value[2:8], byteorder='big')
+                if identifier_authority >= 4294967296:  # 2 ^ 32
+                    identifier_authority = hex(identifier_authority)
+
+                sub_authority = ''
+                i = 0
+                while i < sub_authority_count:
+                    sub_authority += '-' + str(
+                        int.from_bytes(raw_value[8 + (i * 4): 12 + (i * 4)], byteorder='little'))  # little endian
+                    i += 1
+            else:  # Python 2
+                revision = int(ord(raw_value[0]))
+                sub_authority_count = int(ord(raw_value[1]))
+                identifier_authority = int(hexlify(raw_value[2:8]), 16)
+                if identifier_authority >= 4294967296:  # 2 ^ 32
+                    identifier_authority = hex(identifier_authority)
+
+                sub_authority = ''
+                i = 0
+                while i < sub_authority_count:
+                    sub_authority += '-' + str(int(hexlify(raw_value[11 + (i * 4): 7 + (i * 4): -1]), 16))  # little endian
+                    i += 1
+            return 'S-' + str(revision) + '-' + str(identifier_authority) + sub_authority
+        except Exception:  # any exception should be investigated, anyway the formatter return the raw_value
+            pass
+
+        return raw_value
+
+    def format_unicode(self, raw_value):
+        """ From https://github.com/cannatag/ldap3/blob/dev/ldap3/protocol/formatters/formatters.py """
+        try:
+            return str(raw_value, 'utf-8', errors='strict')
+        except (TypeError, UnicodeDecodeError):
+            pass
+
+        return raw_value
+
+    def format_uuid_le(self, raw_value):
+        """ From https://github.com/cannatag/ldap3/blob/dev/ldap3/protocol/formatters/formatters.py """
+        try:
+            return '{' + str(UUID(bytes_le=raw_value)) + '}'
+        except (TypeError, ValueError):
+            return self.format_unicode(raw_value)
+        except Exception:  # any other exception should be investigated, anyway the formatter return the raw_value
+            pass
+
+        return raw_value
+
+    def bofhound_str(self):
+        """ Adapted from https://github.com/Tw1sm/pyldapsearch/blob/925c80aa8b99b4560d72ff1a627b64b566e313c8/pyldapsearch/__main__.py#L344 """
+        attr = self['type']
+        if attr in self._ignore_attributes:
+            return None
+        
+        if attr == 'objectSid':
+            return self.format_sid(self['vals'][0])
+
+        if attr in self._raw_attributes:
+            val = self['vals'][0]._value.decode('utf-8')
+        elif attr in self._base64_attributes:
+            val = base64.b64encode(self['vals'][0]).decode('utf-8')
+        elif attr in self._bracketed_attributes:
+            if attr == 'objectGUID':
+                val = self.format_uuid_le(self['vals'][0])[1:-1]
+            else:
+                val = self['vals'][0][1:-1]
+        elif len(self['vals']) > 1:
+            if type(self['vals'][0]) is bytes:
+                strings = [val.decode('utf-8') for val in self['vals']]
+                val = ', '.join(strings)
+            else:
+                val = ', '.join(self['vals'])
+        else:
+            val = self['vals'][0]
+
+        if type(val) is bytes:
+            try:
+                val = val.decode('utf-8')
+            except UnicodeDecodeError as e:
+                logging.debug(f'Unable to decode {attr} as utf-8')
+                raise(UnicodeDecodeError)
+
+        return val
+
+
 class AttributeValueAssertion(univ.Sequence):
     componentType = namedtype.NamedTypes(
         namedtype.NamedType('attributeDesc', AttributeDescription()),
@@ -177,7 +316,7 @@ class AttributeValueAssertion(univ.Sequence):
     )
 
 
-class PartialAttribute(univ.Sequence):
+class PartialAttribute(univ.Sequence, BofhoundPrintable):
     componentType = namedtype.NamedTypes(
         namedtype.NamedType('type', AttributeDescription()),
         namedtype.NamedType('vals', univ.SetOf(componentType=AttributeValue()))
@@ -188,7 +327,7 @@ class PartialAttributeList(univ.SequenceOf):
     componentType = PartialAttribute()
 
 
-class Attribute(univ.Sequence):
+class Attribute(univ.Sequence, BofhoundPrintable):
     componentType = namedtype.NamedTypes(
         namedtype.NamedType('type', AttributeDescription()),
         namedtype.NamedType(
