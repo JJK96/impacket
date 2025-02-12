@@ -424,6 +424,14 @@ class LdapShell(cmd.Cmd):
         search_query = "".join("(%s=*%s*)" % (attribute, escape_filter_chars(arguments[0])) for attribute in filter_attributes)
         self.search('(|%s)' % search_query, *attributes)
 
+    def do_query(self, line):
+        arguments = shlex.split(line)
+        if len(arguments) == 0:
+            raise Exception("A query is required.")
+        query = arguments[0]
+        attributes = arguments[1:]
+        self.search(query, *attributes)
+
     def do_set_dontreqpreauth(self, line):
         UF_DONT_REQUIRE_PREAUTH = 4194304
 
@@ -611,6 +619,8 @@ class LdapShell(cmd.Cmd):
         self.client.search(self.domain_dumper.root, query, attributes=attributes)
         for entry in self.client.entries:
             print(entry.entry_dn)
+            if len(attributes) == 0:
+                attributes = entry.keys()
             for attribute in attributes:
                 value = entry[attribute].value
                 if value:
@@ -645,6 +655,7 @@ class LdapShell(cmd.Cmd):
  enable_account user - Enable the user's account.
  dump - Dumps the domain.
  search query [attributes,] - Search users and groups by name, distinguishedName and sAMAccountName.
+ query query [attributes,] - Perform a search for an arbitrary LDAP searchFilter.
  get_user_groups user - Retrieves all groups this user is a member of.
  get_group_users group - Retrieves all members of a group.
  get_laps_password computer - Retrieves the LAPS passwords associated with a given computer (sAMAccountName).
